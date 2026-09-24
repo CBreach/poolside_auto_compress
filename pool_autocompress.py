@@ -29,7 +29,7 @@ STATE_ENV = "POOL_AUTOCOMPRESS_STATE"  # must match hooks/pool_hook.py
 SHARED_STATE_PATH = STATE_DIR / "current_session.json"
 DEFAULT_CONFIG = {
     "threshold_pct": 75,
-    "context_window_tokens": 200000,
+    "context_window_tokens": 262144,
     "poll_interval_seconds": 5,
     "cooldown_seconds": 120,
     "rearm_ratio": 0.8,

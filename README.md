@@ -52,14 +52,42 @@ This will:
    `config.example.json`.
 3. Open the threshold picker (see below).
 
-Then use the wrapper instead of `pool` directly:
+### Route `pool` through the wrapper (required)
+
+Installing the hooks alone does **not** make `pool` use the wrapper - without
+this step you're still running plain `pool` and nothing auto-compacts. Add an
+alias to your shell's startup file (use `~/.zshrc` instead of `~/.bashrc` if
+`echo $SHELL` ends in `zsh`, and adjust the path if you cloned the repo
+somewhere other than your home folder):
 
 ```bash
-alias pool="python3 $(pwd)/pool_autocompress.py"
+echo 'alias pool="python3 $HOME/poolside_auto_compress/pool_autocompress.py"' >> ~/.bashrc
+source ~/.bashrc
 ```
 
-(add that to your shell rc so it's automatic). Everything else about your
+Terminals that were already open won't have the alias until you run
+`source ~/.bashrc` in them (or open a new one). Everything else about your
 `pool` session behaves identically - the wrapper is a passthrough.
+
+### Confirm you're actually running through the wrapper
+
+Typing `pool` launches the CLI either way, so it's not a test. Instead:
+
+```bash
+type pool
+```
+
+- `pool is aliased to 'python3 .../pool_autocompress.py'` - you're going
+  through the wrapper.
+- `pool is /home/<you>/...` - you're running plain `pool`; the alias isn't
+  loaded in this terminal (see above).
+
+While a session is open, you can also confirm from a second terminal that a
+per-session state file exists - only the wrapper creates these:
+
+```bash
+ls ~/.cache/poolside_auto_compress/    # expect session-<number>.json
+```
 
 ## Day-to-day operation
 
@@ -101,6 +129,8 @@ there's nothing else to run or remember.
   too (without it the wrapper never sees pool go idle). Also check `context_window_tokens` in
   `config.json` isn't set way too high for your actual model, which would
   make the usage fraction always look small.
+- **Nothing happens at all / no tab title** - check you're actually running
+  through the wrapper (`type pool`, see Setup).
 - **Tab title shows `ctx --` forever** - same cause as the "no session
   trajectory" banner: the hooks aren't firing.
 - **Garbled terminal after a crash** - if the wrapper dies uncleanly your
@@ -129,7 +159,7 @@ change your mind. `install.sh` runs this automatically on first setup, and
 | Key | Meaning |
 |---|---|
 | `threshold_pct` | Set via `configure.py`, not by hand |
-| `context_window_tokens` | Your on-prem model's real context window. **Check this** - the default (200000) is a placeholder and the whole threshold calculation is relative to it |
+| `context_window_tokens` | Your model's real context window. The default is `262144` (256K, our on-prem model); change it if your model differs - the whole threshold calculation is relative to it |
 | `poll_interval_seconds` | How often the background watcher checks usage |
 | `cooldown_seconds` | Minimum time between auto-triggered compactions |
 | `rearm_ratio` | Usage must drop back below `threshold_pct * rearm_ratio` before it's allowed to trigger again |
@@ -183,7 +213,8 @@ you want a clean slate.
 
 - **CLI only.** The VS Code "Poolside Assistant" extension is enterprise-gated
   and its internals aren't public, so this doesn't cover it.
-- **macOS/Linux only.** The PTY-wrapping approach doesn't work on Windows.
+- **macOS, Linux, or WSL only.** The PTY-wrapping approach doesn't work in
+  native Windows shells (PowerShell / cmd) - run `pool` inside WSL.
 - Usage estimation falls back to a coarse bytes/4 heuristic if the trajectory
   file's structured usage fields don't match what's expected - see the
   verification checklist above to confirm (and fix, if needed) the real

@@ -94,8 +94,9 @@ cat <<EOF
 [install] done. Two things worth doing next:
 
 1. Check $CONFIG_DIR/config.json's "context_window_tokens" matches your
-   on-prem model's real context window - the default (200000) is a
-   placeholder.
-2. Use the wrapper instead of pool directly, e.g. add to your shell rc:
+   model's context window (default 262144 = 256K).
+2. Route pool through the wrapper - hooks alone don't do it. Add to your
+   shell rc (~/.bashrc, or ~/.zshrc for zsh), then open a new terminal:
      alias pool="python3 $DIR/pool_autocompress.py"
+   Confirm with 'type pool' - it should say "aliased to".
 EOF

@@ -1,6 +1,6 @@
 {
   "threshold_pct": 75,
-  "context_window_tokens": 200000,
+  "context_window_tokens": 262144,
   "poll_interval_seconds": 5,
   "cooldown_seconds": 120,
   "rearm_ratio": 0.8,
