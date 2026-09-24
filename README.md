@@ -1,7 +1,13 @@
 # poolside_auto_compress
 
 Auto-runs `/compact` in the `pool` CLI once context usage crosses a threshold
-you pick, so you don't have to notice and type it yourself.
+you pick, so you don't have to notice and type it yourself - and shows your
+live context usage in a status bar at the bottom of the terminal, so you
+always know where you're at:
+
+```
+auto-compress ctx 42% ████████░░░░░░░░░░░░ 110k/262k · compacts at 75%
+```
 
 ## Requirements
 
@@ -21,8 +27,8 @@ Instead, `pool_autocompress.py` is a thin, transparent wrapper: it runs real
 straight through untouched, and in the background watches the active
 session's trajectory file for context usage. When you cross your threshold
 and pool is sitting idle at an empty prompt, it types `/compact` and presses
-Enter for you - exactly as if you'd done it - and prints a one-line banner so
-it's never silent about what happened.
+Enter for you - exactly as if you'd done it - and says so in the status bar,
+so it's never silent about what happened.
 
 A tiny installed hook (`hooks/pool_hook.py`) is the only thing that runs
 *inside* pool. It's registered on three of pool's own events:
@@ -78,7 +84,8 @@ type pool
 ```
 
 - `pool is aliased to 'python3 .../pool_autocompress.py'` - you're going
-  through the wrapper.
+  through the wrapper. Once `pool` is open you'll also see the status bar
+  (below) on the terminal's bottom row - that's the quickest visual check.
 - `pool is /home/<you>/...` - you're running plain `pool`; the alias isn't
   loaded in this terminal (see above).
 
@@ -89,23 +96,51 @@ per-session state file exists - only the wrapper creates these:
 ls ~/.cache/poolside_auto_compress/    # expect session-<number>.json
 ```
 
+## The status bar
+
+While `pool` runs through the wrapper, the terminal's bottom row shows your
+current context usage:
+
+```
+auto-compress ctx 42% ████████░░░░░░░░░░░░ 110k/262k · compacts at 75%
+```
+
+- **The percentage and bar** are how much of your model's context window
+  (`context_window_tokens`, 262k by default) the current session is using.
+- **Color** tells you how close you are: green, yellow once you're within
+  80% of your threshold, red once you're over it.
+- **`110k/262k`** is tokens used / window size.
+- **`compacts at 75%`** is your configured threshold.
+- **A `~` in front of the numbers** (`ctx ~42%`) means the wrapper couldn't
+  find real token counts in pool's transcript and is using a rough
+  file-size estimate instead (see the verification checklist).
+- **`ctx -- (waiting for session)`** shows until pool's hooks report the
+  session and the first usage check runs - usually a few seconds after startup.
+- **When it auto-compacts**, the bar shows
+  `76% context used (threshold 75%) - running /compact` for 5 seconds, then
+  goes back to the usage display.
+
+It works the same in any terminal (Windows Terminal, VS Code's terminal,
+plain consoles): the wrapper tells `pool` its window is one row shorter and
+keeps pool's scrolling above the bar, so pool never draws over it. Resizing
+the window moves the bar with it, and it's removed cleanly when `pool`
+exits. In very small windows (under 6 rows) the bar is skipped and pool
+gets the full screen.
+
+To turn it off, set `"status_bar": false` in
+`~/.config/poolside_auto_compress/config.json` (auto-compact messages are
+then printed as a line in the terminal instead). You can also show usage in
+the terminal tab title with `"show_usage_in_title": true`, though many
+terminals (e.g. VS Code's) don't display titles set by programs.
+
 ## Day-to-day operation
 
 Once installed, just use `pool` as you always have (via the alias above) -
 there's nothing else to run or remember.
 
-- The bottom row of the terminal is a status bar showing live context usage:
-  `auto-compress ctx 42% ████████░░░░░░░░░░░░ 110k/262k · compacts at 75%`.
-  The bar is green, turns yellow as you approach your threshold, and red
-  once you're over it. A `~` in front of the numbers means it's the rough
-  bytes/4 estimate, not real token counts from the transcript (see the
-  verification checklist). It works in any terminal (Windows Terminal,
-  VS Code, etc.): pool is simply given one row less of the window. Turn it
-  off with `"status_bar": false`.
-- When your context usage crosses your configured threshold, the status bar
-  shows `76% context used (threshold 75%) - running /compact` for a few
-  seconds and `/compact` is submitted for you. (With the status bar off,
-  this is printed as a line in the terminal instead.)
+- Keep an eye on the status bar (above) for where you're at.
+- When your context usage crosses your configured threshold, `/compact` is
+  submitted for you and the status bar says so for a few seconds.
 - It only fires when pool is **idle at an empty prompt**: never mid-turn
   while the agent is working or waiting on a permission prompt, and never
   while you have a half-typed message (it would otherwise get glued onto
@@ -126,7 +161,7 @@ there's nothing else to run or remember.
 
 ### Troubleshooting
 
-- **"no session trajectory reported yet" banner** - the hooks
+- **"no session trajectory reported yet" message** - the hooks
   aren't registered (re-run `./install.sh`; if you have a pre-existing
   top-level `hooks:` key you may need to merge the snippet in by hand, see
   Setup) or you're on a version of `pool` that doesn't send `trajectory_path`
@@ -212,7 +247,8 @@ trusting this at a real threshold:
 4. Run `python3 configure.py`, set the threshold very low (e.g. via a manual
    edit to `config.json` - the TUI itself only offers 25/50/75/90, which is
    plenty low for this test) and confirm a live `pool` session (via the
-   wrapper) actually gets `/compact` injected and the banner prints.
+   wrapper) actually gets `/compact` injected and the status bar shows the
+   "running /compact" message.
    Also confirm it waits while the agent is mid-turn and while you have
    text typed at the prompt.
 5. Confirm it doesn't refire repeatedly right after compacting, and that it
