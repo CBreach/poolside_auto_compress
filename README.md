@@ -172,15 +172,9 @@ there's nothing else to run or remember.
   make the usage fraction always look small.
 - **Nothing happens at all / no status bar** - check you're actually running
   through the wrapper (`type pool`, see Setup).
-- **It compacts once and never again** - set `"debug_log": true` in
-  `config.json`, run a session through at least two compactions, and look
-  at `~/.cache/poolside_auto_compress/debug-<pid>.log`. It holds only
-  numbers and flags (token estimate, file size, whether it's armed, hook
-  timestamps) - no prompt or code content. Key things to check:
-  `last_compact_at` should change after each `/compact` (if it stays
-  `null`, the `PreCompact` hook isn't firing), and `tokens` should drop
-  after a compaction (if it doesn't, the usage estimate isn't tracking
-  pool's real context - see the verification checklist).
+- **It compacts once and never again, fires at the wrong time, or the
+  status bar's numbers look wrong** - turn on the debug log (see
+  [Debug log](#debug-log) below) and check what the wrapper is seeing.
 - **Status bar shows `ctx -- (waiting for session)` forever** - same cause
   as the "no session trajectory" message: the hooks aren't firing.
 - **pool's screen looks off with the status bar on** (overlapping or
@@ -221,8 +215,91 @@ change your mind. `install.sh` runs this automatically on first setup, and
 | `compact_command` | What gets injected - `/compact` by default; change only if your org's build uses a different command |
 | `pool_binary` | What the wrapper execs - `pool` by default |
 | `status_bar` | Show live context usage in a status bar on the terminal's bottom row (default `true`) |
-| `debug_log` | Write a numbers-only trace of every usage check to `~/.cache/poolside_auto_compress/debug-<pid>.log` (default `false`) |
+| `debug_log` | Write a numbers-only trace of every usage check to `~/.cache/poolside_auto_compress/debug-<pid>.log` (default `false`) - see [Debug log](#debug-log) |
 | `show_usage_in_title` | Also show it in the terminal tab title (default `false`; many terminals, e.g. VS Code's, don't display app-set titles) |
+
+## Debug log
+
+Off by default. When something isn't triggering the way you expect, the
+debug log shows exactly what the wrapper saw and decided on every usage
+check (every `poll_interval_seconds`).
+
+**It contains no prompts, code, or file paths - only numbers, true/false
+flags, and timestamps**, so it's safe to share with whoever is helping you
+debug, even on machines handling sensitive/CUI work. (It's still worth
+glancing over before you share it.)
+
+### Turning it on and off
+
+In `~/.config/poolside_auto_compress/config.json`:
+
+```json
+"debug_log": true
+```
+
+It takes effect the next time you start `pool`. **Set it back to `false`
+when you're done** - the logs are not deleted automatically, and each
+session writes a new file that keeps growing while the session runs.
+
+### Where it goes
+
+One file per wrapper session:
+
+```
+~/.cache/poolside_auto_compress/debug-<pid>.log
+```
+
+where `<pid>` is the wrapper's process ID (the same number as that
+session's `session-<pid>.json`). To see the newest one live:
+
+```bash
+tail -f "$(ls -t ~/.cache/poolside_auto_compress/debug-*.log | head -1)"
+```
+
+To clean them up: `rm ~/.cache/poolside_auto_compress/debug-*.log`.
+
+### What each line means
+
+Each line is one JSON object, e.g.:
+
+```json
+{"t": 1790276790.6, "tokens": 118000, "exact": true, "frac": 0.45, "size": 912345, "offset": 0, "armed": true, "compacted_since_trigger": false, "idle": true, "last_stop_at": 1790276789.2, "last_compact_at": null, "last_trigger": null}
+```
+
+| Field | Meaning |
+|---|---|
+| `t` | When this check ran (Unix timestamp) |
+| `tokens` | Estimated tokens currently in context |
+| `exact` | `true` = real token counts from pool's transcript; `false` = rough file-size estimate (the `~` in the status bar) |
+| `frac` | `tokens / context_window_tokens` - what's compared against your threshold |
+| `size` | Transcript file size in bytes |
+| `offset` | Byte position usage is measured from (the file size at the last compaction; `0` = whole file) |
+| `armed` | `true` = allowed to auto-compact; `false` = already fired, waiting to re-arm |
+| `compacted_since_trigger` | pool confirmed a compaction after our last auto-compact |
+| `idle` | pool is idle at an empty prompt (the only time it will type `/compact`) |
+| `last_stop_at` | When the agent last finished a turn (`Stop` hook) |
+| `last_compact_at` | When pool last compacted (`PreCompact` hook); `null` = never this session |
+| `last_trigger` | When the wrapper last auto-compacted; `null` = not yet |
+
+### Reading it
+
+- **Never fires**: is `frac` actually reaching your threshold (e.g. `0.75`)?
+  If it is, look at `idle` - if it's always `false`, the `Stop` hook isn't
+  firing, or you had text typed at the prompt. If `frac` stays low while
+  pool's own display says you're high, `context_window_tokens` is probably
+  wrong or the estimate is off (`exact: false`).
+- **Fires once, never again**: after the first `/compact`,
+  `last_compact_at` should get a value - if it stays `null`, the
+  `PreCompact` hook isn't firing. `tokens` should also drop; if it stays
+  high, the usage estimate isn't following pool's real context (see the
+  verification checklist). `armed` flips back to `true` once usage is
+  under the threshold after a confirmed compaction.
+- **Numbers don't match pool's own display**: if `exact` is `false`, the
+  wrapper is guessing from file size - the token field names in pool's
+  transcript need adding to the wrapper (verification checklist, step 3).
+- **No log file at all**: the file is only written once the session has
+  been reported by the hooks, so check the "no session trajectory reported
+  yet" item under Troubleshooting.
 
 ## Verification checklist (do this once, on a machine with `pool` installed)
 
