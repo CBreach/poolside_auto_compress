@@ -5,9 +5,9 @@ you pick, so you don't have to notice and type it yourself.
 
 ## Requirements
 
-- macOS or Linux (the wrapper uses a Unix pseudo-terminal; no Windows support)
+- macOS, Linux, or WSL (the wrapper uses a Unix pseudo-terminal; no native Windows support)
 - Python 3.8+ (stdlib only - nothing to `pip install`)
-- `pool` already installed and working on its own before you add this on top
+- `pool` CLI **1.0.16 or newer** (older versions have no hooks and reject the config), installed and working on its own before you add this on top
 
 ## Why it's built this way
 
@@ -66,6 +66,11 @@ alias pool="python3 $(pwd)/pool_autocompress.py"
 Once installed, just use `pool` as you always have (via the alias above) -
 there's nothing else to run or remember.
 
+- Your terminal tab's title shows live context usage, e.g.
+  `pool · ctx 42% ▓▓▓▓░░░░░░ 110k/262k · compacts at 75%`. A `~` in front
+  of the numbers means it's the rough bytes/4 estimate, not real token
+  counts from the transcript (see the verification checklist). Turn it off
+  with `"show_usage_in_title": false`.
 - When your context usage crosses your configured threshold, you'll see a
   banner like `[auto-compress] 76% context used (threshold 75%) - running
   /compact` and `/compact` is submitted for you.
@@ -96,6 +101,8 @@ there's nothing else to run or remember.
   too (without it the wrapper never sees pool go idle). Also check `context_window_tokens` in
   `config.json` isn't set way too high for your actual model, which would
   make the usage fraction always look small.
+- **Tab title shows `ctx --` forever** - same cause as the "no session
+  trajectory" banner: the hooks aren't firing.
 - **Garbled terminal after a crash** - if the wrapper dies uncleanly your
   terminal may be left in raw mode; run `reset` or `stty sane`.
 
@@ -128,6 +135,7 @@ change your mind. `install.sh` runs this automatically on first setup, and
 | `rearm_ratio` | Usage must drop back below `threshold_pct * rearm_ratio` before it's allowed to trigger again |
 | `compact_command` | What gets injected - `/compact` by default; change only if your org's build uses a different command |
 | `pool_binary` | What the wrapper execs - `pool` by default |
+| `show_usage_in_title` | Show live context usage in the terminal tab title (default `true`) |
 
 ## Verification checklist (do this once, on a machine with `pool` installed)
 

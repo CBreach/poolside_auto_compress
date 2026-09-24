@@ -35,6 +35,7 @@ DEFAULT_CONFIG = {
     "rearm_ratio": 0.8,
     "compact_command": "/compact",
     "pool_binary": "pool",
+    "show_usage_in_title": True,
 }
 
 # Raw-mode terminals send Enter as a carriage return. A bare "\n" arrives as
@@ -45,6 +46,14 @@ SUBMIT_KEY = b"\r"
 SUBMIT_DELAY_SECONDS = 0.15
 # Keys that leave the prompt line empty: Enter, Ctrl+C, Ctrl+U.
 _LINE_CLEARING_KEYS = (b"\r", b"\x03", b"\x15")
+# The title is only written once pool's output has been quiet this long, so it
+# can never land in the middle of one of pool's own escape sequences.
+TITLE_QUIET_SECONDS = 0.3
+# Rewrite the title this often even if unchanged, in case pool set its own.
+TITLE_REASSERT_SECONDS = 10
+# xterm title stack: save the user's title on start, restore it on exit.
+TITLE_PUSH = b"\x1b[22;0t"
+TITLE_POP = b"\x1b[23;0t"
 
 
 def load_config() -> dict:
@@ -58,14 +67,22 @@ def load_config() -> dict:
 
 
 def estimate_usage_fraction(trajectory_path: Path, context_window_tokens: int, offset: int = 0):
-    """Best-effort estimate of context usage as a fraction of the window.
+    """Best-effort estimate of context usage as a fraction of the window, or None."""
+    usage = estimate_usage_tokens(trajectory_path, offset)
+    if usage is None:
+        return None
+    return min(usage[0] / context_window_tokens, 1.0)
 
-    Only the part of the trajectory after `offset` (the file size at the most
+
+def estimate_usage_tokens(trajectory_path: Path, offset: int = 0):
+    """Best-effort (tokens, exact) for the live context, or None if unreadable.
+
+    `exact` is True when the count came from real usage stats in the
+    trajectory, False when it's the bytes/4 guess. Only the part of the trajectory after `offset` (the file size at the most
     recent compaction, recorded by the PreCompact hook) is considered, since
     everything before it was summarized away. Tries a structured parse first
     (looking for per-request usage stats in the trajectory's JSON Lines), then
-    falls back to a coarse bytes/4 heuristic. Returns None if the file can't
-    be read at all.
+    falls back to a coarse bytes/4 heuristic.
     """
     try:
         with trajectory_path.open("rb") as f:
@@ -76,11 +93,10 @@ def estimate_usage_fraction(trajectory_path: Path, context_window_tokens: int, o
 
     structured = _structured_usage_from_text(text)
     if structured is not None:
-        return min(structured / context_window_tokens, 1.0)
+        return structured, True
 
     # Fallback heuristic: ~4 bytes per token, applied to the live transcript.
-    approx_tokens = len(text) / 4
-    return min(approx_tokens / context_window_tokens, 1.0)
+    return len(text) / 4, False
 
 
 # Per-request context size. Deliberately no session-cumulative counters here:
@@ -177,6 +193,7 @@ class Session:
         self.out_fd = out_fd
         self.lock = threading.Lock()
         self.last_submit_at = 0.0
+        self.last_output_at = 0.0
         self.pending_input = False  # user has typed something they haven't sent yet
 
     def on_user_input(self, data: bytes):
@@ -194,6 +211,15 @@ class Session:
     def write_output(self, data: bytes):
         with self.lock:
             os.write(self.out_fd, data)
+            self.last_output_at = time.time()
+
+    def set_title(self, title: str) -> bool:
+        """Set the terminal tab title if pool is between writes; False if it wasn't."""
+        with self.lock:
+            if time.time() - self.last_output_at < TITLE_QUIET_SECONDS:
+                return False
+            os.write(self.out_fd, f"\x1b]0;{title}\x07".encode())
+            return True
 
     def banner(self, message: str):
         # \r\n because the real terminal is in raw mode (no \n -> \r\n translation).
@@ -218,15 +244,47 @@ class Session:
             os.write(self.master_fd, SUBMIT_KEY)
 
 
-def watcher_loop(session: Session, state_path: Path, started: float, stop_event: threading.Event):
+def format_title(tokens, exact: bool, window: int, threshold_pct: int) -> str:
+    """e.g. 'pool · ctx 42% ▓▓▓▓░░░░░░ 110k/262k · compacts at 75%' (~ marks a guess)."""
+    if tokens is None:
+        return f"pool · ctx -- · compacts at {threshold_pct}%"
+    frac = min(tokens / window, 1.0)
+    filled = round(frac * 10)
+    bar = "▓" * filled + "░" * (10 - filled)
+    approx = "" if exact else "~"
+    return (
+        f"pool · ctx {approx}{frac*100:.0f}% {bar} "
+        f"{approx}{tokens/1000:.0f}k/{window/1000:.0f}k · compacts at {threshold_pct}%"
+    )
+
+
+def watcher_loop(
+    session: Session, state_path: Path, started: float, show_title: bool, stop_event: threading.Event
+):
     cfg = load_config()
+    window = cfg["context_window_tokens"]
     threshold = cfg["threshold_pct"] / 100.0
     rearm_at = threshold * cfg["rearm_ratio"]
     armed = True
     last_trigger = 0.0
     warned_no_session = False
 
-    while not stop_event.wait(cfg["poll_interval_seconds"]):
+    # Tick faster than the usage poll so a title that couldn't be written
+    # (pool was mid-output) gets retried soon, not a whole poll later.
+    tick = min(1.0, cfg["poll_interval_seconds"])
+    next_poll = 0.0
+    title = format_title(None, False, window, cfg["threshold_pct"])
+    title_written, title_written_at = None, 0.0
+
+    while not stop_event.wait(tick):
+        now = time.time()
+        if show_title and (title != title_written or now - title_written_at >= TITLE_REASSERT_SECONDS):
+            if session.set_title(title):
+                title_written, title_written_at = title, now
+        if now < next_poll:
+            continue
+        next_poll = now + cfg["poll_interval_seconds"]
+
         # Re-read every poll: the trajectory can change on resume, and the
         # Stop/PreCompact hooks keep updating idle state and the compaction offset.
         state = read_state(state_path, started)
@@ -240,11 +298,12 @@ def watcher_loop(session: Session, state_path: Path, started: float, stop_event:
                 warned_no_session = True
             continue
 
-        frac = estimate_usage_fraction(
-            Path(trajectory), cfg["context_window_tokens"], state.get("compact_offset", 0)
-        )
-        if frac is None:
+        usage = estimate_usage_tokens(Path(trajectory), state.get("compact_offset", 0))
+        if usage is None:
             continue
+        tokens, exact = usage
+        frac = min(tokens / window, 1.0)
+        title = format_title(tokens, exact, window, cfg["threshold_pct"])
         if not armed:
             if frac <= rearm_at:
                 armed = True
@@ -263,17 +322,24 @@ def watcher_loop(session: Session, state_path: Path, started: float, stop_event:
             armed = False
 
 
-def _set_winsize(fd: int):
+def _real_winsize():
+    """Packed TIOCSWINSZ struct for the user's real terminal, or None if there isn't one."""
     try:
-        rows, cols = os.get_terminal_size()
+        size = os.get_terminal_size()  # (columns, lines) - note the order
     except OSError:
-        return
-    winsize = struct.pack("HHHH", rows, cols, 0, 0)
-    fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
+        return None
+    return struct.pack("HHHH", size.lines, size.columns, 0, 0)
+
+
+def _set_winsize(fd: int, winsize=None):
+    winsize = winsize or _real_winsize()
+    if winsize is not None:
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
 
 
 def run(argv):
-    pool_binary = load_config().get("pool_binary", "pool")
+    cfg = load_config()
+    pool_binary = cfg["pool_binary"]
     child_argv = [pool_binary] + argv
 
     # One state file per wrapper process, handed to the hooks via the
@@ -291,11 +357,22 @@ def run(argv):
     stdin_fd = sys.stdin.fileno()
     stdout_fd = sys.stdout.fileno()
     is_tty = os.isatty(stdin_fd)
+    winsize = None
     if is_tty:
         old_attrs = termios.tcgetattr(stdin_fd)
+        winsize = _real_winsize()
 
     pid, master_fd = pty.fork()
     if pid == 0:
+        # Give pool's terminal the real terminal's settings and size *before*
+        # it starts, so its first render isn't laid out for a 0x0 window.
+        try:
+            if old_attrs is not None:
+                termios.tcsetattr(0, termios.TCSANOW, old_attrs)
+            if winsize is not None:
+                _set_winsize(0, winsize)
+        except (OSError, termios.error):
+            pass
         try:
             os.execvp(child_argv[0], child_argv)
         except OSError as exc:
@@ -304,17 +381,22 @@ def run(argv):
 
     if is_tty:
         tty.setraw(stdin_fd)
-        _set_winsize(master_fd)
 
         def _on_resize(signum, frame):
             _set_winsize(master_fd)
 
         signal.signal(signal.SIGWINCH, _on_resize)
 
+    show_title = bool(cfg["show_usage_in_title"]) and os.isatty(stdout_fd)
+    if show_title:
+        os.write(stdout_fd, TITLE_PUSH)
+
     session = Session(master_fd, stdout_fd)
     stop_event = threading.Event()
     watcher = threading.Thread(
-        target=watcher_loop, args=(session, state_path, started, stop_event), daemon=True
+        target=watcher_loop,
+        args=(session, state_path, started, show_title, stop_event),
+        daemon=True,
     )
     watcher.start()
 
@@ -339,6 +421,9 @@ def run(argv):
                 session.write_output(data)
     finally:
         stop_event.set()
+        if show_title:
+            with session.lock:
+                os.write(stdout_fd, TITLE_POP)
         if old_attrs is not None:
             termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_attrs)
         for path in (state_path, state_path.with_name(state_path.name + ".tmp")):

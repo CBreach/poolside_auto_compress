@@ -152,9 +152,24 @@ State/config this tool reads and writes at runtime (not in the repo):
   backend); banner uses `\r\n` for the raw-mode terminal; output writes are
   locked so banners can't split pool's escape sequences.
 
+- **2026-09-24, first real run (pool 1.0.6 -> 1.0.16, WSL).** Pool 1.0.6
+  rejects a `hooks:` key in settings.yaml ("unexpected additional
+  properties"); hooks need 1.0.16+ (the version the hooks docs describe).
+  On 1.0.16 the hooks fire and pool *does* pass the wrapper's env var
+  through to hooks (per-wrapper `session-<pid>.json` appeared). Fixed
+  garbled/cascading output: `_set_winsize` unpacked `os.get_terminal_size()`
+  as (rows, cols) but it returns (columns, lines), so pool got a
+  transposed window; the size and termios settings are now also applied to
+  the child's PTY before exec instead of racing pool's startup. Added live
+  context usage in the terminal tab title (OSC 0, only written when pool's
+  output has been quiet 0.3s so it can't split pool's escape sequences;
+  title saved/restored via the xterm title stack).
+
 ## If you're picking this up to continue it
 
 Priority order:
+0. Requires pool CLI **1.0.16+** (hooks). The user's context window is
+   262144 tokens.
 1. Run the README's verification checklist against a real `pool` install.
    Fix the usage-key guesses in `pool_autocompress.py` if the real trajectory
    format doesn't match.
