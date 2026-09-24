@@ -94,22 +94,28 @@ ls ~/.cache/poolside_auto_compress/    # expect session-<number>.json
 Once installed, just use `pool` as you always have (via the alias above) -
 there's nothing else to run or remember.
 
-- Your terminal tab's title shows live context usage, e.g.
-  `pool · ctx 42% ▓▓▓▓░░░░░░ 110k/262k · compacts at 75%`. A `~` in front
-  of the numbers means it's the rough bytes/4 estimate, not real token
-  counts from the transcript (see the verification checklist). Turn it off
-  with `"show_usage_in_title": false`.
-- When your context usage crosses your configured threshold, you'll see a
-  banner like `[auto-compress] 76% context used (threshold 75%) - running
-  /compact` and `/compact` is submitted for you.
+- The bottom row of the terminal is a status bar showing live context usage:
+  `auto-compress ctx 42% ████████░░░░░░░░░░░░ 110k/262k · compacts at 75%`.
+  The bar is green, turns yellow as you approach your threshold, and red
+  once you're over it. A `~` in front of the numbers means it's the rough
+  bytes/4 estimate, not real token counts from the transcript (see the
+  verification checklist). It works in any terminal (Windows Terminal,
+  VS Code, etc.): pool is simply given one row less of the window. Turn it
+  off with `"status_bar": false`.
+- When your context usage crosses your configured threshold, the status bar
+  shows `76% context used (threshold 75%) - running /compact` for a few
+  seconds and `/compact` is submitted for you. (With the status bar off,
+  this is printed as a line in the terminal instead.)
 - It only fires when pool is **idle at an empty prompt**: never mid-turn
   while the agent is working or waiting on a permission prompt, and never
   while you have a half-typed message (it would otherwise get glued onto
   your text). If you're over the threshold with something typed, it waits
   until you send it or clear the line (Ctrl+U / Ctrl+C).
-- It won't fire again immediately after - it waits until usage drops back
-  down (below `threshold_pct * rearm_ratio`) and climbs back up, with a
-  minimum gap of `cooldown_seconds` regardless.
+- It won't fire again immediately after. It re-arms once pool confirms the
+  compaction happened and usage is back under your threshold (or usage
+  drops below `threshold_pct * rearm_ratio`), then fires again the next
+  time you climb over it - with a minimum gap of `cooldown_seconds`
+  regardless.
 - To change your threshold later: `python3 configure.py` (or
   `python3 pool_autocompress.py --configure`) any time, including mid-project.
 - To run plain `pool` without the wrapper for one session (e.g. to sanity
@@ -129,10 +135,24 @@ there's nothing else to run or remember.
   too (without it the wrapper never sees pool go idle). Also check `context_window_tokens` in
   `config.json` isn't set way too high for your actual model, which would
   make the usage fraction always look small.
-- **Nothing happens at all / no tab title** - check you're actually running
+- **Nothing happens at all / no status bar** - check you're actually running
   through the wrapper (`type pool`, see Setup).
-- **Tab title shows `ctx --` forever** - same cause as the "no session
-  trajectory" banner: the hooks aren't firing.
+- **It compacts once and never again** - set `"debug_log": true` in
+  `config.json`, run a session through at least two compactions, and look
+  at `~/.cache/poolside_auto_compress/debug-<pid>.log`. It holds only
+  numbers and flags (token estimate, file size, whether it's armed, hook
+  timestamps) - no prompt or code content. Key things to check:
+  `last_compact_at` should change after each `/compact` (if it stays
+  `null`, the `PreCompact` hook isn't firing), and `tokens` should drop
+  after a compaction (if it doesn't, the usage estimate isn't tracking
+  pool's real context - see the verification checklist).
+- **Status bar shows `ctx -- (waiting for session)` forever** - same cause
+  as the "no session trajectory" message: the hooks aren't firing.
+- **pool's screen looks off with the status bar on** (overlapping or
+  missing lines at the bottom) - set `"status_bar": false` in `config.json`
+  and let us know what you saw. The bar fences off the bottom row using
+  standard terminal scroll regions; an app doing something unusual with
+  the screen could still fight with it.
 - **Garbled terminal after a crash** - if the wrapper dies uncleanly your
   terminal may be left in raw mode; run `reset` or `stty sane`.
 
@@ -165,7 +185,9 @@ change your mind. `install.sh` runs this automatically on first setup, and
 | `rearm_ratio` | Usage must drop back below `threshold_pct * rearm_ratio` before it's allowed to trigger again |
 | `compact_command` | What gets injected - `/compact` by default; change only if your org's build uses a different command |
 | `pool_binary` | What the wrapper execs - `pool` by default |
-| `show_usage_in_title` | Show live context usage in the terminal tab title (default `true`) |
+| `status_bar` | Show live context usage in a status bar on the terminal's bottom row (default `true`) |
+| `debug_log` | Write a numbers-only trace of every usage check to `~/.cache/poolside_auto_compress/debug-<pid>.log` (default `false`) |
+| `show_usage_in_title` | Also show it in the terminal tab title (default `false`; many terminals, e.g. VS Code's, don't display app-set titles) |
 
 ## Verification checklist (do this once, on a machine with `pool` installed)
 

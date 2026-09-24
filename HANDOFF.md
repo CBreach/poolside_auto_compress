@@ -120,6 +120,7 @@ commands run)
 | File | Role |
 |---|---|
 | `pool_autocompress.py` | The wrapper. PTY spawn of `pool`, passthrough I/O, background usage-watcher thread that injects `/compact`. |
+| `status_bar.py` | Bottom-row status bar: scroll-region fencing, output filter that keeps pool out of the bar's row, bar rendering. |
 | `configure.py` | Curses TUI, 4 fixed choices (25/50/75/90), writes `threshold_pct` to config. Also importable as a module by `pool_autocompress.py --configure`. |
 | `hooks/pool_hook.py` | Installed pool hook for `SessionStart` / `Stop` / `PreCompact`. Records trajectory path, idle-ness, and compaction offset to the wrapper's state file. Never fails, never prints. |
 | `install.sh` | Idempotent installer. Marker-delimited append to `settings.yaml`, refuses to auto-merge if a top-level `hooks:` key already exists, sets up config dir, launches the TUI. |
@@ -164,6 +165,40 @@ State/config this tool reads and writes at runtime (not in the repo):
   context usage in the terminal tab title (OSC 0, only written when pool's
   output has been quiet 0.3s so it can't split pool's escape sequences;
   title saved/restored via the xterm title stack).
+
+- **2026-09-24, status bar (branch `status-indicator`).** The tab title
+  wasn't visible for the user, and terminals vary per engineer (Windows
+  Terminal, VS Code, ...), so usage now shows in a bar on the terminal's
+  bottom row. pool is given rows-1, the real terminal's scroll region
+  (DECSTBM) is limited to rows 1..rows-1, and `status_bar.OutputFilter`
+  rewrites pool's scroll-region resets to stop above the bar and marks the
+  bar dirty on clears / full reset / alt-screen switches. The bar is only
+  drawn when pool's output has been quiet 0.3s (same rule as the title),
+  and escape sequences split across reads are held back until complete.
+  `[auto-compress]` messages go to the bar instead of being printed, since
+  a foreign line in pool's screen can desync pool's redraw bookkeeping.
+  Tested with a fake pool through the `pyte` terminal emulator: bar stays
+  on the bottom row through scrolling, scroll-region resets, clear screen,
+  RIS and resize; pool's text scrolls intact above it. Title is now off by
+  default (`show_usage_in_title`). Known remaining risk: the bar uses
+  DECSC/DECRC (ESC 7 / ESC 8) to save/restore the cursor, which shares a
+  single slot with pool's own use of them if pool uses them across a pause.
+  Also noted: pool 1.0.16 shows its own context % in its UI - reading that
+  from the output stream could replace the trajectory-parsing estimate.
+
+- **2026-09-24, re-arm fixes (branch `status-indicator`).** User saw it
+  compact once and never again. Two causes reproduced with a fake pool:
+  (1) re-arming required usage to fall below `threshold * rearm_ratio`,
+  but the post-compaction summary can sit above that - now it also
+  re-arms when `last_compact_at` (PreCompact hook) is newer than our
+  trigger and usage is under the threshold (never while still over it, so
+  a stuck estimate can't loop /compact every cooldown); (2) if pool
+  rewrites the trajectory in place instead of appending, the PreCompact
+  byte offset is meaningless - the hook now also stores a sha256 of the
+  file's first `compact_head_len` bytes, and the wrapper resets the offset
+  to 0 if the file shrank or its start changed. Which of these real pool
+  hits is still unconfirmed; `"debug_log": true` writes a numbers-only
+  trace to diagnose it. Status bar messages now last 5s (was 15s).
 
 ## If you're picking this up to continue it
 

@@ -6,5 +6,7 @@
   "rearm_ratio": 0.8,
   "compact_command": "/compact",
   "pool_binary": "pool",
-  "show_usage_in_title": true
+  "status_bar": true,
+  "show_usage_in_title": false,
+  "debug_log": false
 }

@@ -10,7 +10,9 @@ records what the wrapper needs into a small state file it polls:
                 (the only safe moment to inject /compact).
 - PreCompact:   a compaction is happening (auto-triggered or typed by hand),
                 plus the trajectory's size at that moment, so usage can be
-                measured from there on instead of from the start of the file.
+                measured from there on instead of from the start of the file,
+                and a hash of the file's first bytes, so the wrapper can tell
+                if pool later rewrites the file instead of appending to it.
 
 The state file path comes from $POOL_AUTOCOMPRESS_STATE, which the wrapper
 sets uniquely per wrapper process - so two pool sessions in two terminals
@@ -20,6 +22,7 @@ back to a shared default path, which is only useful for debugging.
 Always exits 0 with no stdout - this hook only observes, it never blocks or
 rewrites anything, so a bug here can't break a real pool session.
 """
+import hashlib
 import json
 import os
 import sys
@@ -28,6 +31,16 @@ from pathlib import Path
 
 STATE_ENV = "POOL_AUTOCOMPRESS_STATE"
 DEFAULT_STATE_PATH = Path.home() / ".cache" / "poolside_auto_compress" / "current_session.json"
+# How much of the trajectory's start to fingerprint at PreCompact (the wrapper
+# re-hashes the same length, stored as compact_head_len). If pool later
+# rewrites the file instead of appending to it, the fingerprint changes and
+# the wrapper knows the offset is stale.
+HEAD_BYTES = 4096
+
+
+def head_fingerprint(path: Path, length: int) -> str:
+    with path.open("rb") as f:
+        return hashlib.sha256(f.read(length)).hexdigest()
 
 
 def _handle(payload: dict):
@@ -55,7 +68,12 @@ def _handle(payload: dict):
         state["last_compact_at"] = now
         if trajectory_path:
             try:
-                state["compact_offset"] = Path(trajectory_path).stat().st_size
+                path = Path(trajectory_path)
+                size = path.stat().st_size
+                head_len = min(size, HEAD_BYTES)
+                state["compact_offset"] = size
+                state["compact_head_len"] = head_len
+                state["compact_head"] = head_fingerprint(path, head_len)
             except OSError:
                 pass
 
